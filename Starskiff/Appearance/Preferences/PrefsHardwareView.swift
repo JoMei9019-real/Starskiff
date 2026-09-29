@@ -15,14 +15,19 @@ final class PrefsHardwareView: NSView {
     private let interfaceValue = NSTextField(labelWithString: .unknown)
     private let chipValue = NSTextField(labelWithString: .unknown)
     private let firmwareValue = NSTextField(labelWithString: .unknown)
+    private let kextVersionValue = NSTextField(labelWithString: .unknown)
+    private let appVersionValue = NSTextField(labelWithString: .unknown)
     private let macValue = NSTextField(labelWithString: .unknown)
     private let scanOffloadValue = NSTextField(labelWithString: .unknown)
     private let stateValue = NSTextField(labelWithString: .unknown)
     private let ssidValue = NSTextField(labelWithString: .emptyValue)
     private let bssidValue = NSTextField(labelWithString: .emptyValue)
     private let channelValue = NSTextField(labelWithString: .emptyValue)
+    private let bandValue = NSTextField(labelWithString: .emptyValue)
     private let rssiValue = NSTextField(labelWithString: .emptyValue)
     private let trafficValue = NSTextField(labelWithString: .emptyValue)
+    private var refreshTimer: Timer?
+    private var isRefreshing = false
 
     convenience init() {
         self.init(frame: .zero)
@@ -38,7 +43,28 @@ final class PrefsHardwareView: NSView {
         addSubview(gridView)
         addSubview(refreshButton)
         setupConstraints()
+        appVersionValue.stringValue = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+            as? String ?? .unavailable
         refresh()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        refreshTimer?.invalidate()
+        refreshTimer = nil
+
+        guard window != nil else { return }
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            guard let self = self, let window = self.window,
+                  window.isVisible, window.isKeyWindow, NSApp.isActive else { return }
+            self.refresh()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        refreshTimer = timer
+    }
+
+    deinit {
+        refreshTimer?.invalidate()
     }
 
     required init?(coder: NSCoder) {
@@ -52,12 +78,15 @@ final class PrefsHardwareView: NSView {
         addRow(.interface, interfaceValue)
         addRow(.chipset, chipValue)
         addRow(.firmware, firmwareValue)
+        addRow(.kextVersion, kextVersionValue)
+        addRow(.appVersion, appVersionValue)
         addRow(.macAddress, macValue)
         addRow(.scanOffload, scanOffloadValue)
         addRow(.state, stateValue)
         addRow(.ssid, ssidValue)
         addRow(.bssid, bssidValue)
         addRow(.channel, channelValue)
+        addRow(.band, bandValue)
         addRow(.rssi, rssiValue)
         addRow(.traffic, trafficValue)
     }
@@ -86,33 +115,56 @@ final class PrefsHardwareView: NSView {
     }
 
     @objc private func refresh() {
-        var info = hardware_info_t()
-        guard get_hardware_info(&info) else {
-            setUnavailable()
-            return
+        guard !isRefreshing else { return }
+        isRefreshing = true
+        refreshButton.isEnabled = false
+
+        DispatchQueue.global(qos: .utility).async {
+            var info = hardware_info_t()
+            let available = get_hardware_info(&info)
+            let kextVersion = KextInfo("com.rtw88.driver").getKextVersion()
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.isRefreshing = false
+                self.refreshButton.isEnabled = true
+                self.kextVersionValue.stringValue = kextVersion ?? .unavailable
+
+                guard available else {
+                    self.setUnavailable()
+                    return
+                }
+
+                self.interfaceValue.stringValue = self.nonEmpty(String(cCharArray: info.interface_name))
+                self.chipValue.stringValue = self.nonEmpty(String(cCharArray: info.chip_name))
+                self.firmwareValue.stringValue = "\(info.fw_version).\(info.fw_sub_version)"
+                self.macValue.stringValue = self.formatAddress(info.mac_addr)
+                self.scanOffloadValue.stringValue = info.scan_offload_supported != 0 ? .yes : .no
+                self.stateValue.stringValue = self.stateDescription(info.state)
+
+                let ssid = String(cCharArray: info.ssid)
+                self.ssidValue.stringValue = ssid.isEmpty ? .emptyValue : ssid
+                self.bssidValue.stringValue = self.formatDynamicAddress(info.bssid)
+                self.channelValue.stringValue = info.channel == 0 ? .emptyValue : String(info.channel)
+                self.bandValue.stringValue = self.connectedBand(state: info.state, channel: info.channel)
+                self.rssiValue.stringValue = info.rssi == 0 || info.rssi <= -100 ?
+                    .emptyValue : "\(info.rssi) dBm"
+                self.trafficValue.stringValue = self.formatTraffic(rx: info.rx_byte_count,
+                                                                    tx: info.tx_byte_count)
+            }
         }
-
-        interfaceValue.stringValue = nonEmpty(String(cCharArray: info.interface_name))
-        chipValue.stringValue = nonEmpty(String(cCharArray: info.chip_name))
-        firmwareValue.stringValue = "\(info.fw_version).\(info.fw_sub_version)"
-        macValue.stringValue = formatAddress(info.mac_addr)
-        scanOffloadValue.stringValue = info.scan_offload_supported != 0 ?
-            .yes : .no
-        stateValue.stringValue = stateDescription(info.state)
-
-        let ssid = String(cCharArray: info.ssid)
-        ssidValue.stringValue = ssid.isEmpty ? .emptyValue : ssid
-        bssidValue.stringValue = formatDynamicAddress(info.bssid)
-        channelValue.stringValue = info.channel == 0 ? .emptyValue : String(info.channel)
-        rssiValue.stringValue = info.rssi == 0 || info.rssi <= -100 ? .emptyValue : "\(info.rssi) dBm"
-        trafficValue.stringValue = formatTraffic(rx: info.rx_byte_count, tx: info.tx_byte_count)
     }
 
     private func setUnavailable() {
         [interfaceValue, chipValue, firmwareValue, macValue, scanOffloadValue, stateValue, ssidValue,
-         bssidValue, channelValue, rssiValue, trafficValue].forEach {
+         bssidValue, channelValue, bandValue, rssiValue, trafficValue].forEach {
             $0.stringValue = .unavailable
         }
+    }
+
+    private func connectedBand(state: UInt32, channel: UInt32) -> String {
+        guard state == 5, channel != 0 else { return .emptyValue }
+        return channel <= 14 ? "2.4 GHz" : "5 GHz"
     }
 
     private func nonEmpty(_ value: String) -> String {
@@ -162,12 +214,15 @@ private extension String {
     static let interface = NSLocalizedString("Interface:")
     static let chipset = NSLocalizedString("Chipset:")
     static let firmware = NSLocalizedString("Firmware:")
+    static let kextVersion = NSLocalizedString("Kext Version:")
+    static let appVersion = NSLocalizedString("Starskiff Version:")
     static let macAddress = NSLocalizedString("MAC Address:")
     static let scanOffload = NSLocalizedString("Scan Offload:")
     static let state = NSLocalizedString("State:")
     static let ssid = NSLocalizedString("SSID:")
     static let bssid = NSLocalizedString("BSSID:")
     static let channel = NSLocalizedString("Channel:")
+    static let band = NSLocalizedString("Band:")
     static let rssi = NSLocalizedString("RSSI:")
     static let traffic = NSLocalizedString("Traffic:")
     static let unknown = NSLocalizedString("Unknown")

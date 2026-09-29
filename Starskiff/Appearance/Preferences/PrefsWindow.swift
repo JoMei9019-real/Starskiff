@@ -88,7 +88,7 @@ class PrefsWindow: NSWindow {
             size = NSSize(width: 620, height: 420)
         case .hardware:
             newView = PrefsHardwareView()
-            size = NSSize(width: 520, height: 360)
+            size = NSSize(width: 520, height: 450)
         case .general:
             newView = PrefsGeneralView()
             size = newView!.fittingSize
