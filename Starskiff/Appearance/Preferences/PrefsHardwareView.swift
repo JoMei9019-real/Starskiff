@@ -89,11 +89,16 @@ final class PrefsHardwareView: NSView {
         addRow(.band, bandValue)
         addRow(.rssi, rssiValue)
         addRow(.traffic, trafficValue)
+
+        gridView.column(at: 0).width = 160
+        gridView.column(at: 0).xPlacement = .leading
+        gridView.column(at: 1).xPlacement = .leading
     }
 
     private func addRow(_ title: String, _ value: NSTextField) {
         let label = NSTextField(labelWithString: title)
-        label.alignment = .right
+        label.alignment = .left
+        value.alignment = .left
         value.lineBreakMode = .byTruncatingMiddle
         value.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         gridView.addRow(with: [label, value])
